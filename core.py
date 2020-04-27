@@ -131,3 +131,44 @@ class MLPActorCritic(nn.Module):
 
     def act(self, obs):
         return self.step(obs)[0]
+
+
+class CNNActorCritic(nn.Module):
+
+
+    def __init__(self, observation_space, action_space, 
+                 hidden_sizes=(64,64), activation=nn.Tanh):
+        super().__init__()
+
+        obs_dim = 3136
+        in_dim = observation_space.shape[2]
+        self.encoder = nn.Sequential(
+            nn.Conv2d(1, 32, 8, 4),
+            nn.ReLU(True),
+            nn.Conv2d(32, 64, 4, 2),
+            nn.ReLU(True),
+            nn.Conv2d(64, 64, 3, 1),
+            nn.ReLU(True),
+            nn.Flatten(),
+        )
+
+        # policy builder depends on action space
+        if isinstance(action_space, Box):
+            self.pi = MLPGaussianActor(obs_dim, action_space.shape[0], hidden_sizes, activation)
+        elif isinstance(action_space, Discrete):
+            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
+
+        # build value function
+        self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
+
+    def step(self, obs):
+        with torch.no_grad():
+            latent = self.encoder(obs)
+            pi = self.pi._distribution(latent)
+            a = pi.sample()
+            logp_a = self.pi._log_prob_from_distribution(pi, a)
+            v = self.v(latent)
+        return a.numpy(), v.numpy(), logp_a.numpy()
+
+    def act(self, obs):
+        return self.step(obs)[0]
