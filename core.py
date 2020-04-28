@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.signal
 from gym.spaces import Box, Discrete
-
+import math
 import torch
 import torch.nn as nn
 from torch.distributions.normal import Normal
@@ -18,7 +18,9 @@ def mlp(sizes, activation, output_activation=nn.Identity):
     layers = []
     for j in range(len(sizes)-1):
         act = activation if j < len(sizes)-2 else output_activation
-        layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
+        # layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
+        layers.append(nn.Linear(sizes[j], sizes[j+1]))
+        layers.append(act())
     return nn.Sequential(*layers)
 
 
@@ -66,6 +68,15 @@ class MLPCategoricalActor(Actor):
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
         self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
+        # self.logits_net = nn.Sequential(
+        #     nn.Linear(obs_dim, hidden_sizes[0]),
+        #     nn.Linear(hidden_sizes[0], act_dim),
+        # )
+
+        for _, m in self.logits_net.named_modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, 1e-2)
+                nn.init.constant_(m.bias, 0)
 
     def _distribution(self, obs):
         logits = self.logits_net(obs)
@@ -97,6 +108,11 @@ class MLPCritic(nn.Module):
     def __init__(self, obs_dim, hidden_sizes, activation):
         super().__init__()
         self.v_net = mlp([obs_dim] + list(hidden_sizes) + [1], activation)
+
+        for _, m in self.v_net.named_modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
 
     def forward(self, obs):
         return torch.squeeze(self.v_net(obs), -1) # Critical to ensure v has right shape.
@@ -137,7 +153,7 @@ class CNNActorCritic(nn.Module):
 
 
     def __init__(self, observation_space, action_space, 
-                 hidden_sizes=(64,64), activation=nn.Tanh):
+                 hidden_sizes=(512), activation=nn.ReLU):
         super().__init__()
 
         obs_dim = 3136
@@ -150,7 +166,14 @@ class CNNActorCritic(nn.Module):
             nn.Conv2d(64, 64, 3, 1),
             nn.ReLU(True),
             nn.Flatten(),
+            nn.Linear(obs_dim, obs_dim),
+            nn.ReLU(True)
         )
+
+        for _, m in self.encoder.named_modules():
+            if isinstance(m, nn.Conv2d) or isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, math.sqrt(2))
+                nn.init.constant_(m.bias, 0)
 
         # policy builder depends on action space
         if isinstance(action_space, Box):
