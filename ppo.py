@@ -2,6 +2,7 @@ import numpy as np
 import torch
 from torch.optim import Adam
 from torch.utils.data import DataLoader
+import torch.nn as nn
 from torchvision import transforms
 import gym
 import time
@@ -187,6 +188,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+    ac.to(device)
 
     # Sync params across processes
     # sync_params(ac)
@@ -262,20 +264,24 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         #     vf_optimizer.step()
         total_loss = 0
         loader = DataLoader(list(zip(*data)), 4, True)
-        for obs, act, ret, adv, logp in loader:
-            latent = ac.encoder(obs)
+        for _ in range(4):
+            total_loss = 0
+            for obs, act, ret, adv, logp in loader:
+                latent = ac.encoder(obs)
 
-            loss_pi, pi_info, ent_loss = compute_loss_pi(latent, act, adv, logp)
-            loss_v = compute_loss_v(latent, ret)
+                loss_pi, pi_info, ent_loss = compute_loss_pi(latent, act, adv, logp)
+                loss_v = compute_loss_v(latent, ret)
 
-            loss = loss_pi + 0.5*loss_v + 0.01*ent_loss
-            total_loss += loss.item()
+                loss = loss_pi + 0.5*loss_v + 0.01*ent_loss
+                total_loss += loss.item()
 
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
+                optimizer.zero_grad()
+                loss.backward()
+                # if grad_norm is not None:
+                nn.utils.clip_grad_norm_(ac.parameters(), 0.5)
+                optimizer.step()
 
-        print(total_loss/1000)
+            print(total_loss/1000)
 
 
         # Log changes from update
@@ -309,7 +315,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     for epoch in range(epochs):
         for t in range(local_steps_per_epoch):
             
-            a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0))
+            a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0).to(device))
 
             next_o, r, d, _ = env.step(a)
             next_o = pre_processing(next_o)
@@ -333,7 +339,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                     print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
                 # if trajectory didn't reach terminal state, bootstrap value target
                 if timeout or epoch_ended:
-                    _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0))
+                    _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0).to(device))
                 else:
                     v = 0
                 buf.finish_path(v)
@@ -368,6 +374,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
 
+    torch.save(ac.state_dict(), 'model.pth')
+
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
@@ -377,8 +385,8 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=int, default=2000)
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--steps', type=int, default=1024)
+    parser.add_argument('--epochs', type=int, default=500)
     parser.add_argument('--exp_name', type=str, default='ppo')
     args = parser.parse_args()
 

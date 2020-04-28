@@ -149,7 +149,7 @@ class CNNActorCritic(nn.Module):
 
 
     def __init__(self, observation_space, action_space, 
-                 hidden_sizes=(512), activation=nn.ReLU):
+                 hidden_sizes=[512], activation=nn.ReLU):
         super().__init__()
 
         obs_dim = 3136
@@ -187,7 +187,7 @@ class CNNActorCritic(nn.Module):
             a = pi.sample()
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(latent)
-        return a.numpy(), v.numpy(), logp_a.numpy()
+        return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy()
 
     def act(self, obs):
         return self.step(obs)[0]
