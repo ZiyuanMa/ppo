@@ -18,9 +18,9 @@ def mlp(sizes, activation, output_activation=nn.Identity):
     layers = []
     for j in range(len(sizes)-1):
         act = activation if j < len(sizes)-2 else output_activation
-        # layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
-        layers.append(nn.Linear(sizes[j], sizes[j+1]))
-        layers.append(act())
+        layers += [nn.Linear(sizes[j], sizes[j+1]), act()]
+        # layers.append(nn.Linear(sizes[j], sizes[j+1]))
+        # layers.append(act())
     return nn.Sequential(*layers)
 
 
@@ -68,10 +68,6 @@ class MLPCategoricalActor(Actor):
     def __init__(self, obs_dim, act_dim, hidden_sizes, activation):
         super().__init__()
         self.logits_net = mlp([obs_dim] + list(hidden_sizes) + [act_dim], activation)
-        # self.logits_net = nn.Sequential(
-        #     nn.Linear(obs_dim, hidden_sizes[0]),
-        #     nn.Linear(hidden_sizes[0], act_dim),
-        # )
 
         for _, m in self.logits_net.named_modules():
             if isinstance(m, nn.Linear):
@@ -195,3 +191,9 @@ class CNNActorCritic(nn.Module):
 
     def act(self, obs):
         return self.step(obs)[0]
+
+    def forward(self, obs):
+        latent = self.encoder(obs)
+        prob = self.pi(latent)
+        v = self.v(latent)
+        return prob, v
