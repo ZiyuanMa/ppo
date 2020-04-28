@@ -9,6 +9,7 @@ import core
 from logx import EpochLogger
 from mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 
 class PPOBuffer:
@@ -81,9 +82,8 @@ class PPOBuffer:
         # the next two lines implement the advantage normalization trick
         adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        data = dict(obs=self.obs_buf, act=self.act_buf, ret=self.ret_buf,
-                    adv=self.adv_buf, logp=self.logp_buf)
-        return {k: torch.as_tensor(v, dtype=torch.float32) for k,v in data.items()}
+        data = [self.obs_buf, self.act_buf, self.ret_buf, self.adv_buf, self.logp_buf]
+        return [ torch.as_tensor(i, dtype=torch.float32).to(device) for i in data]
 
 
 
@@ -261,7 +261,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         #     # mpi_avg_grads(ac.v)    # average grads across MPI processes
         #     vf_optimizer.step()
         total_loss = 0
-        loader = DataLoader(list(zip(*data.values())), 4, True)
+        loader = DataLoader(list(zip(*data)), 4, True)
         for obs, act, ret, adv, logp in loader:
             latent = ac.encoder(obs)
 
@@ -377,7 +377,7 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=int, default=4000)
+    parser.add_argument('--steps', type=int, default=2000)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--exp_name', type=str, default='ppo')
     args = parser.parse_args()
