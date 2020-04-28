@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch.optim import Adam
+from torch.utils.data import DataLoader
 from torchvision import transforms
 import gym
 import time
@@ -199,11 +200,13 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
 
     # Set up function for computing PPO policy loss
-    def compute_loss_pi(data):
-        obs, act, adv, logp_old = data['obs'], data['act'], data['adv'], data['logp']
+    def compute_loss_pi(latent, act, adv, logp_old):
 
         # Policy loss
-        pi, logp = ac.pi(obs, act)
+        pi, logp = ac.pi(latent, act)
+        entropy = pi.entropy().mean()
+
+        # pi, logp = ac.pi(obs, act)
         ratio = torch.exp(logp - logp_old)
         clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
         loss_pi = -(torch.min(ratio * adv, clip_adv)).mean()
@@ -215,57 +218,77 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
         pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
 
-        return loss_pi, pi_info
+        return loss_pi, pi_info, entropy
 
     # Set up function for computing value loss
-    def compute_loss_v(data):
-        obs, ret = data['obs'], data['ret']
-        return ((ac.v(obs) - ret)**2).mean()
+    def compute_loss_v(latent, ret):
+
+        return ((ac.v(latent) - ret)**2).mean()
 
     # Set up optimizers for policy and value function
-    pi_optimizer = Adam(ac.pi.parameters(), lr=pi_lr)
-    vf_optimizer = Adam(ac.v.parameters(), lr=vf_lr)
+    optimizer = Adam(ac.parameters(), lr=2.5e-4, eps=1e-5)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
 
     def update():
         data = buf.get()
-        d = list(zip(*data))
 
-        pi_l_old, pi_info_old = compute_loss_pi(data)
-        pi_l_old = pi_l_old.item()
-        v_l_old = compute_loss_v(data).item()
+        # pi_l_old, pi_info_old = compute_loss_pi(data)
+        # pi_l_old = pi_l_old.item()
+        # v_l_old = compute_loss_v(data).item()
 
-        # Train policy with multiple steps of gradient descent
-        for i in range(train_pi_iters):
-            pi_optimizer.zero_grad()
-            loss_pi, pi_info = compute_loss_pi(data)
-            # kl = mpi_avg(pi_info['kl'])
-            kl = pi_info['kl']
-            if kl > 1.5 * target_kl:
-                logger.log('Early stopping at step %d due to reaching max kl.'%i)
-                break
-            loss_pi.backward()
-            # mpi_avg_grads(ac.pi)    # average grads across MPI processes
-            pi_optimizer.step()
+        # # Train policy with multiple steps of gradient descent
+        # for i in range(train_pi_iters):
+        #     pi_optimizer.zero_grad()
+        #     loss_pi, pi_info = compute_loss_pi(data)
+        #     # kl = mpi_avg(pi_info['kl'])
+        #     kl = pi_info['kl']
+        #     if kl > 1.5 * target_kl:
+        #         logger.log('Early stopping at step %d due to reaching max kl.'%i)
+        #         break
+        #     loss_pi.backward()
+        #     # mpi_avg_grads(ac.pi)    # average grads across MPI processes
+        #     pi_optimizer.step()
 
-        logger.store(StopIter=i)
+        # logger.store(StopIter=i)
 
-        # Value function learning
-        for i in range(train_v_iters):
-            vf_optimizer.zero_grad()
-            loss_v = compute_loss_v(data)
-            loss_v.backward()
-            # mpi_avg_grads(ac.v)    # average grads across MPI processes
-            vf_optimizer.step()
+        # # Value function learning
+        # for i in range(train_v_iters):
+        #     vf_optimizer.zero_grad()
+        #     loss_v = compute_loss_v(data)
+        #     loss_v.backward()
+        #     # mpi_avg_grads(ac.v)    # average grads across MPI processes
+        #     vf_optimizer.step()
+        total_loss = 0
+        loader = DataLoader(list(zip(*data.values())), 4, True)
+        for obs, act, ret, adv, logp in loader:
+            latent = ac.encoder(obs)
+
+            loss_pi, pi_info, ent_loss = compute_loss_pi(latent, act, adv, logp)
+            loss_v = compute_loss_v(latent, ret)
+
+            loss = loss_pi + 0.5*loss_v + 0.01*ent_loss
+            total_loss += loss.item()
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+        print(total_loss/1000)
+
 
         # Log changes from update
-        kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
-        logger.store(LossPi=pi_l_old, LossV=v_l_old,
-                     KL=kl, Entropy=ent, ClipFrac=cf,
-                     DeltaLossPi=(loss_pi.item() - pi_l_old),
-                     DeltaLossV=(loss_v.item() - v_l_old))
+        # kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
+        # logger.store(LossPi=pi_l_old, LossV=v_l_old,
+        #              KL=kl, Entropy=ent, ClipFrac=cf,
+        #              DeltaLossPi=(loss_pi.item() - pi_l_old),
+        #              DeltaLossV=(loss_v.item() - v_l_old))
+
+        # logger.store(LossPi=pi_l_old, LossV=v_l_old,
+        #              KL=kl, Entropy=ent, ClipFrac=cf,
+        #              DeltaLossPi=(loss_pi.item() - pi_l_old),
+        #              DeltaLossV=(loss_v.item() - v_l_old))
 
     pre_processing = transforms.Compose([
         transforms.ToPILImage(),
@@ -275,12 +298,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         transforms.Lambda(lambda x: x.numpy())
 
     ])
-    
-    def to_tensor(obs):
-        obs = np.transpose(obs, (2, 0, 1))
-        obs = np.expand_dims(obs, 0)
-        obs = torch.as_tensor(obs, dtype=torch.float32)
-        return obs
+
 
     # Prepare for interaction with environment
     start_time = time.time()
@@ -339,14 +357,14 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('VVals', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
-        logger.log_tabular('LossPi', average_only=True)
-        logger.log_tabular('LossV', average_only=True)
-        logger.log_tabular('DeltaLossPi', average_only=True)
-        logger.log_tabular('DeltaLossV', average_only=True)
-        logger.log_tabular('Entropy', average_only=True)
-        logger.log_tabular('KL', average_only=True)
-        logger.log_tabular('ClipFrac', average_only=True)
-        logger.log_tabular('StopIter', average_only=True)
+        # logger.log_tabular('LossPi', average_only=True)
+        # logger.log_tabular('LossV', average_only=True)
+        # logger.log_tabular('DeltaLossPi', average_only=True)
+        # logger.log_tabular('DeltaLossV', average_only=True)
+        # logger.log_tabular('Entropy', average_only=True)
+        # logger.log_tabular('KL', average_only=True)
+        # logger.log_tabular('ClipFrac', average_only=True)
+        # logger.log_tabular('StopIter', average_only=True)
         logger.log_tabular('Time', time.time()-start_time)
         logger.dump_tabular()
 
