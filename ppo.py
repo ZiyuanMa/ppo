@@ -263,10 +263,16 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         #     # mpi_avg_grads(ac.v)    # average grads across MPI processes
         #     vf_optimizer.step()
         total_loss = 0
-        loader = DataLoader(list(zip(*data)), 4, True)
+        loader = DataLoader(list(zip(*data)), 64)
         for _ in range(4):
             total_loss = 0
             for obs, act, ret, adv, logp in loader:
+                # obs = obs.to(device)
+                # act = act.to(device)
+                # ret = ret.to(device)
+                # adv = adv.to(device)
+                # logp = logp.to(device)
+
                 latent = ac.encoder(obs)
 
                 loss_pi, pi_info, ent_loss = compute_loss_pi(latent, act, adv, logp)
@@ -385,8 +391,8 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=int, default=1024)
-    parser.add_argument('--epochs', type=int, default=500)
+    parser.add_argument('--steps', type=int, default=1000)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--exp_name', type=str, default='ppo')
     args = parser.parse_args()
 
