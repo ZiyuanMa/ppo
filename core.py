@@ -149,10 +149,11 @@ class CNNActorCritic(nn.Module):
 
 
     def __init__(self, observation_space, action_space, 
-                 hidden_sizes=[512], activation=nn.ReLU):
+                 hidden_sizes=[], activation=nn.ReLU):
         super().__init__()
 
         obs_dim = 3136
+        latent_dim = 512
         in_dim = observation_space.shape[2]
         self.encoder = nn.Sequential(
             nn.Conv2d(1, 32, 8, 4),
@@ -162,7 +163,7 @@ class CNNActorCritic(nn.Module):
             nn.Conv2d(64, 64, 3, 1),
             nn.ReLU(True),
             nn.Flatten(),
-            nn.Linear(obs_dim, obs_dim),
+            nn.Linear(obs_dim, latent_dim),
             nn.ReLU(True)
         )
 
@@ -173,12 +174,12 @@ class CNNActorCritic(nn.Module):
 
         # policy builder depends on action space
         if isinstance(action_space, Box):
-            self.pi = MLPGaussianActor(obs_dim, action_space.shape[0], hidden_sizes, activation)
+            self.pi = MLPGaussianActor(latent_dim, action_space.shape[0], hidden_sizes, activation)
         elif isinstance(action_space, Discrete):
-            self.pi = MLPCategoricalActor(obs_dim, action_space.n, hidden_sizes, activation)
+            self.pi = MLPCategoricalActor(latent_dim, action_space.n, hidden_sizes, activation)
 
         # build value function
-        self.v  = MLPCritic(obs_dim, hidden_sizes, activation)
+        self.v  = MLPCritic(latent_dim, hidden_sizes, activation)
 
     def step(self, obs):
         with torch.no_grad():

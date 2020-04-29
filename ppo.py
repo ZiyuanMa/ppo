@@ -224,8 +224,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Set up function for computing value loss
     def compute_loss_v(latent, ret):
-
-        return ((ac.v(latent) - ret).clamp(1-clip_ratio, 1+clip_ratio)**2).mean()
+        return 0.5 * ((ac.v(latent) - ret)**2).mean()
+        # return 0.5 * ((ac.v(latent) - ret).clamp(-clip_ratio, clip_ratio)**2).mean()
 
     # Set up optimizers for policy and value function
     optimizer = Adam(ac.parameters(), lr=2.5e-4, eps=1e-5)
@@ -274,7 +274,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 loss_pi, pi_info, ent_loss = compute_loss_pi(latent, act, adv, logp)
                 loss_v = compute_loss_v(latent, ret)
 
-                loss = loss_pi + 0.5*loss_v + 0.01*ent_loss
+                loss = loss_pi + 0.5*loss_v - 0.01*ent_loss
                 total_loss += loss.item()
 
                 optimizer.zero_grad()
