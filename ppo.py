@@ -89,8 +89,8 @@ class PPOBuffer:
 
 
 def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0, 
-        steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2, pi_lr=3e-4,
-        vf_lr=1e-3, train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
+        steps_per_epoch=4000, epochs=50, gamma=0.99, clip_ratio=0.2,
+        train_pi_iters=80, train_v_iters=80, lam=0.97, max_ep_len=1000,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10):
     """
     Proximal Policy Optimization (by clipping), 
@@ -225,7 +225,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
     # Set up function for computing value loss
     def compute_loss_v(latent, ret):
 
-        return ((ac.v(latent) - ret)**2).mean()
+        return ((ac.v(latent) - ret).clamp(1-clip_ratio, 1+clip_ratio)**2).mean()
 
     # Set up optimizers for policy and value function
     optimizer = Adam(ac.parameters(), lr=2.5e-4, eps=1e-5)
@@ -264,14 +264,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         #     vf_optimizer.step()
         total_loss = 0
         loader = DataLoader(list(zip(*data)), 64)
+
         for _ in range(4):
             total_loss = 0
             for obs, act, ret, adv, logp in loader:
-                # obs = obs.to(device)
-                # act = act.to(device)
-                # ret = ret.to(device)
-                # adv = adv.to(device)
-                # logp = logp.to(device)
 
                 latent = ac.encoder(obs)
 
@@ -287,7 +283,8 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 nn.utils.clip_grad_norm_(ac.parameters(), 0.5)
                 optimizer.step()
 
-            print(total_loss/1000)
+        # print(total_loss/4/len(loader))
+        logger.store(Loss=total_loss/4/len(loader))
 
 
         # Log changes from update
@@ -319,6 +316,7 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
+        ep_num = 0
         for t in range(local_steps_per_epoch):
             
             a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0).to(device))
@@ -352,8 +350,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
                 if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
+
                 o, ep_ret, ep_len = env.reset(), 0, 0
                 o = pre_processing(o)
+                ep_num += 1
 
 
         # Save model
@@ -367,9 +367,10 @@ def ppo(env_fn, actor_critic=core.MLPActorCritic, ac_kwargs=dict(), seed=0,
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
         logger.log_tabular('EpLen', average_only=True)
+        logger.log_tabular('EpNum', ep_num)
         logger.log_tabular('VVals', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
-        # logger.log_tabular('LossPi', average_only=True)
+        logger.log_tabular('Loss', average_only=True)
         # logger.log_tabular('LossV', average_only=True)
         # logger.log_tabular('DeltaLossPi', average_only=True)
         # logger.log_tabular('DeltaLossV', average_only=True)
@@ -391,7 +392,8 @@ if __name__ == '__main__':
     parser.add_argument('--gamma', type=float, default=0.99)
     parser.add_argument('--seed', '-s', type=int, default=0)
     parser.add_argument('--cpu', type=int, default=4)
-    parser.add_argument('--steps', type=int, default=1000)
+    parser.add_argument('--batch', type=int, default=64)
+    parser.add_argument('--steps', type=int, default=2000)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--exp_name', type=str, default='ppo')
     args = parser.parse_args()
