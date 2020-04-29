@@ -156,7 +156,7 @@ class CNNActorCritic(nn.Module):
         latent_dim = 512
         in_dim = observation_space.shape[2]
         self.encoder = nn.Sequential(
-            nn.Conv2d(1, 32, 8, 4),
+            nn.Conv2d(4, 32, 8, 4),
             nn.ReLU(True),
             nn.Conv2d(32, 64, 4, 2),
             nn.ReLU(True),
