@@ -8,6 +8,7 @@ from torchvision import transforms
 import gym
 import time
 import core
+from vecenv import VecEnv
 from logx import EpochLogger
 from mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
 from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
@@ -89,7 +90,7 @@ class PPOBuffer:
 
 
 
-def ppo(env_fn, 
+def ppo(env_name, 
         steps_per_epoch, minibatch_size, epochs, clip_reward, max_ep_len,
         gamma=0.99, clip_ratio=0.2, seed=0, 
         lam=0.97, ent_coef=0.01, v_coef=1, grad_norm=0.5,
@@ -184,9 +185,9 @@ def ppo(env_fn,
     np.random.seed(seed)
 
     # Instantiate environment
-    env = env_fn()
-    obs_dim = env.observation_space.shape
-    act_dim = env.action_space.shape
+    env = VecEnv(env_name, 8)
+    obs_dim = env.envs[0].observation_space.shape
+    act_dim = env.envs[0].action_space.shape
 
     # Create actor-critic module
     ac = actor_critic(env.observation_space, env.action_space)
@@ -433,7 +434,7 @@ if __name__ == '__main__':
     from run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
-    ppo(lambda : gym.make(args.env), 
+    ppo(nev_name=args.env, 
         clip_reward = args.clip_rew, max_ep_len=args.max_ep,
         seed=args.seed, steps_per_epoch=args.steps, minibatch_size=args.batch, epochs=args.epochs,
         logger_kwargs=logger_kwargs)
