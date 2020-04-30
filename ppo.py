@@ -92,7 +92,7 @@ class PPOBuffer:
 def ppo(env_fn, 
         steps_per_epoch, minibatch_size, epochs, ac_kwargs=dict(),
         gamma=0.99, clip_ratio=0.2, seed=0, 
-        lam=0.97, max_ep_len=1000, ent_coef=0.01, v_coef=0.5, grad_norm=0.5,
+        lam=0.97, max_ep_len=1000, ent_coef=0.01, v_coef=1, grad_norm=0.5,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10, actor_critic=core.CNNActorCritic):
     """
     Proximal Policy Optimization (by clipping), 
@@ -285,11 +285,14 @@ def ppo(env_fn,
 
                 optimizer.zero_grad()
                 loss.backward()
-                # if grad_norm is not None:
-                nn.utils.clip_grad_norm_(ac.parameters(), grad_norm)
+                if grad_norm is not None:
+                    nn.utils.clip_grad_norm_(ac.parameters(), grad_norm)
                 optimizer.step()
 
+                logger.store(PiLoss=pi_loss.item(), VLoss=v_loss.item(), EntLoss=ent_loss.item())
+
         # print(total_loss/4/len(loader))
+        scheduler.step()
         logger.store(Loss=total_loss/4/len(loader))
 
 
@@ -324,7 +327,7 @@ def ppo(env_fn,
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         ep_num = 0
-        scheduler.step()
+
         for t in range(local_steps_per_epoch):
             
             o = np.concatenate(memory)
@@ -348,6 +351,8 @@ def ppo(env_fn,
             
             # Update obs (critical!)
             o = next_o
+
+            # update memory
             memory.pop(0)
             memory.append(np.copy(o))
 
@@ -355,13 +360,14 @@ def ppo(env_fn,
             terminal = d or timeout
             epoch_ended = t==local_steps_per_epoch-1
 
-            if terminal or epoch_ended:
+            if d or timeout or epoch_ended:
                 if epoch_ended and not(terminal):
                     print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
                 # if trajectory didn't reach terminal state, bootstrap value target
                 if timeout or epoch_ended:
                     o = np.concatenate(memory)
                     _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0).to(device))
+                    
                 else:
                     v = 0
                 buf.finish_path(v)
@@ -369,11 +375,13 @@ def ppo(env_fn,
                     # only save EpRet / EpLen if trajectory finished
                     logger.store(EpRet=ep_ret, EpLen=ep_len)
 
-                o, ep_ret, ep_len = env.reset(), 0, 0
-                o = pre_processing(o)
-                memory = [np.copy(o) for _ in range(4)]
-                ep_num += 1
+                if d:
+                    o, ep_ret = env.reset(), 0
+                    o = pre_processing(o)
+                    memory = [np.copy(o) for _ in range(4)]
+                    ep_num += 1
 
+                ep_len = 0
 
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
@@ -389,7 +397,9 @@ def ppo(env_fn,
         logger.log_tabular('EpNum', ep_num)
         logger.log_tabular('VVals', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
-        logger.log_tabular('Loss', average_only=True)
+        logger.log_tabular('PiLoss', average_only=True)
+        logger.log_tabular('VLoss', average_only=True)
+        logger.log_tabular('EntLoss', average_only=True)
         # logger.log_tabular('LossV', average_only=True)
         # logger.log_tabular('DeltaLossPi', average_only=True)
         # logger.log_tabular('DeltaLossV', average_only=True)
@@ -412,8 +422,9 @@ if __name__ == '__main__':
     parser.add_argument('--cpu', type=int, default=4)
     parser.add_argument('--batch', type=int, default=64, help='minibatch size')
     parser.add_argument('--steps', type=int, default=2048, help='number of steps per epoch')
-    parser.add_argument('--max_ep', type=int, default=1024, help='max length for one episode')
+    parser.add_argument('--max_ep', type=int, default=128, help='max length for one episode')
     parser.add_argument('--epochs', type=int, default=500)
+    parser.add_argument('--clip_rew', type=int, default=None)
     parser.add_argument('--exp_name', type=str, default='ppo')
     args = parser.parse_args()
 
