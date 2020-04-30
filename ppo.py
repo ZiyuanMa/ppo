@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch.optim import Adam
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 import torch.nn as nn
 from torchvision import transforms
@@ -230,6 +231,7 @@ def ppo(env_fn,
 
     # Set up optimizers for policy and value function
     optimizer = Adam(ac.parameters(), lr=2.5e-4, eps=1e-5)
+    scheduler = LambdaLR(optimizer, lambda epoch: 1 - epoch / epochs)
 
     # Set up model saving
     logger.setup_pytorch_saver(ac)
@@ -322,6 +324,7 @@ def ppo(env_fn,
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         ep_num = 0
+        scheduler.step()
         for t in range(local_steps_per_epoch):
             
             o = np.concatenate(memory)
