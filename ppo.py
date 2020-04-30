@@ -90,9 +90,9 @@ class PPOBuffer:
 
 
 def ppo(env_fn, 
-        steps_per_epoch, minibatch_size, epochs, ac_kwargs=dict(),
+        steps_per_epoch, minibatch_size, epochs, clip_reward, max_ep_len,
         gamma=0.99, clip_ratio=0.2, seed=0, 
-        lam=0.97, max_ep_len=1000, ent_coef=0.01, v_coef=1, grad_norm=0.5,
+        lam=0.97, ent_coef=0.01, v_coef=1, grad_norm=0.5,
         target_kl=0.01, logger_kwargs=dict(), save_freq=10, actor_critic=core.CNNActorCritic):
     """
     Proximal Policy Optimization (by clipping), 
@@ -189,7 +189,7 @@ def ppo(env_fn,
     act_dim = env.action_space.shape
 
     # Create actor-critic module
-    ac = actor_critic(env.observation_space, env.action_space, **ac_kwargs)
+    ac = actor_critic(env.observation_space, env.action_space)
     ac.to(device)
 
     # Sync params across processes
@@ -337,10 +337,11 @@ def ppo(env_fn,
             next_o = pre_processing(next_o)
 
             # reward clipping
-            if r > 10:
-                r = 10
-            elif r < -10:
-                r = -10
+            if clip_reward is not None:
+                if r > clip_reward:
+                    r = clip_reward
+                elif r < -clip_reward:
+                    r = -clip_reward
 
             ep_ret += r
             ep_len += 1
@@ -371,15 +372,17 @@ def ppo(env_fn,
                 else:
                     v = 0
                 buf.finish_path(v)
-                if terminal:
+                # if terminal:
                     # only save EpRet / EpLen if trajectory finished
-                    logger.store(EpRet=ep_ret, EpLen=ep_len)
+                    # logger.store(EpRet=ep_ret, EpLen=ep_len)
 
                 if d:
+                    logger.store(EpRet=ep_ret)
                     o, ep_ret = env.reset(), 0
                     o = pre_processing(o)
                     memory = [np.copy(o) for _ in range(4)]
                     ep_num += 1
+
 
                 ep_len = 0
 
@@ -393,7 +396,6 @@ def ppo(env_fn,
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
         logger.log_tabular('EpRet', with_min_and_max=True)
-        logger.log_tabular('EpLen', average_only=True)
         logger.log_tabular('EpNum', ep_num)
         logger.log_tabular('VVals', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
@@ -416,10 +418,7 @@ if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--env', type=str, default='BreakoutDeterministic-v4')
-    parser.add_argument('--hid', type=int, default=512)
-    parser.add_argument('--l', type=int, default=0)
     parser.add_argument('--seed', '-s', type=int, default=0)
-    parser.add_argument('--cpu', type=int, default=4)
     parser.add_argument('--batch', type=int, default=64, help='minibatch size')
     parser.add_argument('--steps', type=int, default=2048, help='number of steps per epoch')
     parser.add_argument('--max_ep', type=int, default=128, help='max length for one episode')
@@ -434,6 +433,6 @@ if __name__ == '__main__':
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
     ppo(lambda : gym.make(args.env), 
-        ac_kwargs=dict(hidden_sizes=[args.hid]*args.l),
+        clip_reward = args.clip_rew, max_ep_len=args.max_ep,
         seed=args.seed, steps_per_epoch=args.steps, minibatch_size=args.batch, epochs=args.epochs,
         logger_kwargs=logger_kwargs)
