@@ -362,24 +362,27 @@ def ppo(env_name, env_num,
             # memory.pop(0)
             # memory.append(np.copy(o))
 
-            timeout = ep_len == max_ep_len
             done = True in d
             epoch_ended = t==local_steps_per_epoch-1
 
-            if done or timeout or epoch_ended:
-                if done:
-                    for i, d_ in enumerate(d):
-                        if d_:
-                            buf.finish_path(i)
-                            ep_num += 1
+            if done or epoch_ended:
 
                 # if trajectory didn't reach terminal state, bootstrap value target
-                if timeout or epoch_ended:
+                if epoch_ended:
                     concat_o = np.stack(o, axis=0)
                     _, v, _ = ac.step(torch.as_tensor(concat_o, dtype=torch.float32).to(device))
                     for i, d_ in enumerate(d):
                         if not d_:
                             buf.finish_path(i, v[i])
+
+                if done:
+                    d_idx = [i for i, d_ in enumerate(d) if d_]
+                    for i, d_ in enumerate(d):
+                        if d_:
+                            buf.finish_path(i)
+                            ep_num += 1
+
+                    o = env.reset(d_idx)
 
                 # if terminal:
                     # only save EpRet / EpLen if trajectory finished
