@@ -208,19 +208,19 @@ def ppo(env_name, env_num,
     buf = PPOBuffer(obs_dim, act_dim, steps_per_epoch, env_num, gamma, lam)
 
     # Set up function for computing PPO policy loss
-    def compute_pi_loss(latent, act, adv, logp_old):
+    def compute_pi_loss(latent, act, adv, old_logp):
 
         # Policy loss
         pi, logp = ac.pi(latent, act)
         entropy = pi.entropy().mean()
 
         # pi, logp = ac.pi(obs, act)
-        ratio = torch.exp(logp - logp_old)
+        ratio = torch.exp(logp - old_logp)
         clip_adv = torch.clamp(ratio, 1-clip_ratio, 1+clip_ratio) * adv
         pi_loss = -(torch.min(ratio * adv, clip_adv)).mean()
 
         # Useful extra info
-        approx_kl = (logp_old - logp).mean().item()
+        approx_kl = (old_logp - logp).mean().item()
         ent = pi.entropy().mean().item()
         clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
         clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
