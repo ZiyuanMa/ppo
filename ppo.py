@@ -88,7 +88,7 @@ class PPOBuffer:
         # the next two lines implement the advantage normalization trick
         # adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         # self.adv_buf = (self.adv_buf - adv_mean) / adv_std
-        data = [self.obs_buf, self.act_buf, self.ret_buf, self.adv_buf, self.logp_buf]
+        data = [self.obs_buf, self.act_buf, self.ret_buf, self.logp_buf, self.val_buf, self.adv_buf]
         return [ torch.as_tensor(i, dtype=torch.float32).to(device) for i in data]
 
 
@@ -229,8 +229,13 @@ def ppo(env_name, env_num,
         return pi_loss, pi_info, entropy
 
     # Set up function for computing value loss
-    def compute_v_loss(latent, ret):
-        return 0.5 * ((ac.v(latent) - ret)**2).mean()
+    def compute_v_loss(latent, old_val, ret):
+        val = ac.v(latent)
+        clip_val = old_val + (val - old_val).clamp(-clip_ratio, clip_ratio)
+        return 0.5* (torch.max(
+                        (val - ret).pow(2),
+                        (clip_val - ret).pow(2)
+                    )).mean()
         # return 0.5 * ((ac.v(latent) - ret).clamp(-clip_ratio, clip_ratio)**2).mean()
 
     # Set up optimizers for policy and value function
@@ -274,7 +279,7 @@ def ppo(env_name, env_num,
 
         for _ in range(4):
             total_loss = 0
-            for obs, act, ret, adv, logp in loader:
+            for obs, act, ret, logp, val, adv in loader:
                 
                 # trick: advantage normalization
                 adv = (adv-adv.mean())/(adv.std()+1e-8)
@@ -282,7 +287,7 @@ def ppo(env_name, env_num,
                 latent = ac.encoder(obs)
 
                 pi_loss, pi_info, ent_loss = compute_pi_loss(latent, act, adv, logp)
-                v_loss = compute_v_loss(latent, ret)
+                v_loss = compute_v_loss(latent, val, ret)
 
                 loss = pi_loss + v_coef*v_loss - ent_coef*ent_loss
                 total_loss += loss.item()
