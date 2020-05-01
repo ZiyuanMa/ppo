@@ -212,7 +212,7 @@ def ppo(env_name, env_num,
 
         # Policy loss
         pi, logp = ac.pi(latent, act)
-        entropy = pi.entropy().mean()
+        ent_loss = pi.entropy().mean()
 
         # pi, logp = ac.pi(obs, act)
         ratio = torch.exp(logp - old_logp)
@@ -220,13 +220,13 @@ def ppo(env_name, env_num,
         pi_loss = -(torch.min(ratio * adv, clip_adv)).mean()
 
         # Useful extra info
-        approx_kl = (old_logp - logp).mean().item()
-        ent = pi.entropy().mean().item()
-        clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
-        clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
-        pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
+        # approx_kl = (old_logp - logp).mean().item()
+        # ent = pi.entropy().mean().item()
+        # clipped = ratio.gt(1+clip_ratio) | ratio.lt(1-clip_ratio)
+        # clipfrac = torch.as_tensor(clipped, dtype=torch.float32).mean().item()
+        # pi_info = dict(kl=approx_kl, ent=ent, cf=clipfrac)
 
-        return pi_loss, pi_info, entropy
+        return pi_loss, ent_loss
 
     # Set up function for computing value loss
     def compute_v_loss(latent, old_val, ret):
@@ -286,7 +286,7 @@ def ppo(env_name, env_num,
 
                 latent = ac.encoder(obs)
 
-                pi_loss, pi_info, ent_loss = compute_pi_loss(latent, act, adv, logp)
+                pi_loss, ent_loss = compute_pi_loss(latent, act, adv, logp)
                 v_loss = compute_v_loss(latent, val, ret)
 
                 loss = pi_loss + v_coef*v_loss - ent_coef*ent_loss
