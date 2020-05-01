@@ -312,16 +312,6 @@ def ppo(env_name, env_num,
         #              DeltaLossPi=(pi_loss.item() - pi_l_old),
         #              DeltaLossV=(v_loss.item() - v_l_old))
 
-    pre_processing = transforms.Compose([
-        transforms.Lambda(lambda x: x[:195,:,:]),
-        transforms.ToPILImage(),
-        transforms.Grayscale(),
-        transforms.Resize((84, 84)),
-        transforms.ToTensor(),
-        transforms.Lambda(lambda x: x.numpy()),
-
-    ])
-
 
     # Prepare for interaction with environment
     start_time = time.time()
@@ -423,9 +413,9 @@ def ppo(env_name, env_num,
 if __name__ == '__main__':
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument('--env', type=str, default='PongDeterministic-v4')
+    parser.add_argument('--env', type=str, default='MsPacman-v0')
     parser.add_argument('--seed', '-s', type=int, default=0)
-    parser.add_argument('--batch', type=int, default=64, help='minibatch size')
+    parser.add_argument('--batch', type=int, default=256, help='minibatch size')
     parser.add_argument('--steps', type=int, default=1024, help='number of steps per epoch')
     parser.add_argument('--max_ep', type=int, default=128, help='max length for one episode')
     parser.add_argument('--epochs', type=int, default=2000)
