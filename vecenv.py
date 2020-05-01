@@ -1,6 +1,7 @@
 import gym
 import numpy as np
 from torchvision import transforms
+from typing import Dict, List, Optional
 
 pre_processing = transforms.Compose([
         transforms.Lambda(lambda x: x[:195,:,:]),
@@ -17,11 +18,15 @@ class VecEnv:
         self.envs = [gym.make(name) for _ in range(num)]
         self.memory = [[] for _ in range(num)]
 
-    def reset(self):
+    def reset(self, env_ids: List[int]):
         obs = [pre_processing(env.reset()) for env in self.envs]
         for memory, o in zip(self.memory, obs):
             memory.clear()
             memory = [np.copy(o) for _ in range(4)]
+
+        for env_id in env_ids:
+            o = self.envs[env_id].reset()
+            
 
         return obs
 

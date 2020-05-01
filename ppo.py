@@ -7,6 +7,7 @@ import torch.nn as nn
 from torchvision import transforms
 import gym
 import time
+from typing import Dict, List, Optional
 import core
 from vecenv import VecEnv
 from logx import EpochLogger
@@ -22,7 +23,7 @@ class PPOBuffer:
     for calculating the advantages of state-action pairs.
     """
 
-    def __init__(self, obs_dim, act_dim, size, gamma=0.99, lam=0.95):
+    def __init__(self, obs_dim, act_dim, size, env_num, gamma=0.99, lam=0.95):
         obs_dim=(4,84,84)
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
@@ -31,22 +32,24 @@ class PPOBuffer:
         self.ret_buf = np.zeros(size, dtype=np.float32)
         self.val_buf = np.zeros(size, dtype=np.float32)
         self.logp_buf = np.zeros(size, dtype=np.float32)
+        self.env_num = env_num
         self.gamma, self.lam = gamma, lam
-        self.ptr, self.path_start_idx, self.max_size = 0, 0, size
-
-    def store(self, obs, act, rew, val, logp):
+        self.ptr, self.max_size = 0, size//env_num
+        self.path_start_idx = [0 for _ in range(env_num)]
+    def store(self, obs: List[np.ndarray], act: List[int], rew, val, logp):
         """
         Append one timestep of agent-environment interaction to the buffer.
         """
         assert self.ptr < self.max_size     # buffer has to have room so you can store
-        self.obs_buf[self.ptr] = obs
-        self.act_buf[self.ptr] = act
-        self.rew_buf[self.ptr] = rew
-        self.val_buf[self.ptr] = val
-        self.logp_buf[self.ptr] = logp
+        for i in range(self.env_num):
+            self.obs_buf[self.ptr+i*self.max_size] = obs[i]
+            self.act_buf[self.ptr+i*self.max_size] = act[i]
+            self.rew_buf[self.ptr+i*self.max_size] = rew[i]
+            self.val_buf[self.ptr+i*self.max_size] = val[i]
+            self.logp_buf[self.ptr+i*self.max_size] = logp[i]
         self.ptr += 1
 
-    def finish_path(self, last_val=0):
+    def finish_path(self, env_id, last_val=0):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -61,7 +64,7 @@ class PPOBuffer:
         for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
         """
 
-        path_slice = slice(self.path_start_idx, self.ptr)
+        path_slice = slice(self.path_start_idx[env_id]+env_id*self.max_size, self.ptr+env_id*self.max_size)
         rews = np.append(self.rew_buf[path_slice], last_val)
         vals = np.append(self.val_buf[path_slice], last_val)
         
@@ -72,7 +75,7 @@ class PPOBuffer:
         # the next line computes rewards-to-go, to be targets for the value function
         self.ret_buf[path_slice] = core.discount_cumsum(rews, self.gamma)[:-1]
         
-        self.path_start_idx = self.ptr
+        self.path_start_idx[env_id] = self.ptr
 
     def get(self):
         """
@@ -90,7 +93,7 @@ class PPOBuffer:
 
 
 
-def ppo(env_name, 
+def ppo(env_name, env_num,
         steps_per_epoch, minibatch_size, epochs, clip_reward, max_ep_len,
         gamma=0.99, clip_ratio=0.2, seed=0, 
         lam=0.97, ent_coef=0.01, v_coef=1, grad_norm=0.5,
@@ -185,7 +188,7 @@ def ppo(env_name,
     np.random.seed(seed)
 
     # Instantiate environment
-    env = VecEnv(env_name, 8)
+    env = VecEnv(env_name, env_num)
     obs_dim = env.envs[0].observation_space.shape
     act_dim = env.envs[0].action_space.shape
 
@@ -434,7 +437,7 @@ if __name__ == '__main__':
     from run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
-    ppo(nev_name=args.env, 
+    ppo(nev_name=args.env, env_num=8,
         clip_reward = args.clip_rew, max_ep_len=args.max_ep,
         seed=args.seed, steps_per_epoch=args.steps, minibatch_size=args.batch, epochs=args.epochs,
         logger_kwargs=logger_kwargs)
