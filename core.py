@@ -137,6 +137,7 @@ class MLPActorCritic(nn.Module):
         with torch.no_grad():
             pi = self.pi._distribution(obs)
             a = pi.sample()
+
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(obs)
         return a.numpy(), v.numpy(), logp_a.numpy()
@@ -185,7 +186,9 @@ class CNNActorCritic(nn.Module):
         with torch.no_grad():
             latent = self.encoder(obs)
             pi = self.pi._distribution(latent)
+
             a = pi.sample()
+
             logp_a = self.pi._log_prob_from_distribution(pi, a)
             v = self.v(latent)
         return a.cpu().numpy(), v.cpu().numpy(), logp_a.cpu().numpy()

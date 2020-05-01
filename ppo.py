@@ -49,7 +49,7 @@ class PPOBuffer:
             self.logp_buf[self.ptr+i*self.max_size] = logp[i]
         self.ptr += 1
 
-    def finish_path(self, env_id, last_val=0):
+    def finish_path(self, env_id: int, last_val=0):
         """
         Call this at the end of a trajectory, or when one gets cut off
         by an epoch ending. This looks back in the buffer to where the
@@ -84,7 +84,7 @@ class PPOBuffer:
         mean zero and std one). Also, resets some pointers in the buffer.
         """
         assert self.ptr == self.max_size    # buffer has to be full before you can get
-        self.ptr, self.path_start_idx = 0, 0
+        self.ptr, self.path_start_idx = 0, [0 for _ in range(self.env_num)]
         # the next two lines implement the advantage normalization trick
         # adv_mean, adv_std = mpi_statistics_scalar(self.adv_buf)
         # self.adv_buf = (self.adv_buf - adv_mean) / adv_std
@@ -193,7 +193,7 @@ def ppo(env_name, env_num,
     act_dim = env.envs[0].action_space.shape
 
     # Create actor-critic module
-    ac = actor_critic(env.observation_space, env.action_space)
+    ac = actor_critic(env.envs[0].observation_space, env.envs[0].action_space)
     ac.to(device)
 
     # Sync params across processes
@@ -204,8 +204,8 @@ def ppo(env_name, env_num,
     logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
 
     # Set up experience buffer
-    local_steps_per_epoch = int(steps_per_epoch / num_procs())
-    buf = PPOBuffer(obs_dim, act_dim, local_steps_per_epoch, gamma, lam)
+    local_steps_per_epoch = steps_per_epoch // env_num
+    buf = PPOBuffer(obs_dim, act_dim, steps_per_epoch, env_num, gamma, lam)
 
     # Set up function for computing PPO policy loss
     def compute_pi_loss(latent, act, adv, logp_old):
@@ -277,7 +277,7 @@ def ppo(env_name, env_num,
             for obs, act, ret, adv, logp in loader:
                 
                 # trick: advantage normalization
-                adv = (adv-adv.mean())/adv.std()
+                adv = (adv-adv.mean())/(adv.std()+1e-8)
 
                 latent = ac.encoder(obs)
 
@@ -325,9 +325,9 @@ def ppo(env_name, env_num,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    o, ep_ret, ep_len = env.reset(), 0, 0
-    o = pre_processing(o)
-    memory = [np.copy(o) for _ in range(4)]
+    o, ep_ret, ep_len = env.reset([i for i in range(env_num)]), 0, 0
+    # o = pre_processing(o)
+    # memory = [np.copy(o) for _ in range(4)]
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
@@ -335,58 +335,56 @@ def ppo(env_name, env_num,
 
         for t in range(local_steps_per_epoch):
             
-            o = np.concatenate(memory)
-            a, v, logp = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0).to(device))
+            concat_o = np.stack(o, axis=0)
+            a, v, logp = ac.step(torch.as_tensor(concat_o, dtype=torch.float32).to(device))
 
-            next_o, r, d, _ = env.step(a)
-            next_o = pre_processing(next_o)
+            next_o, r, d = env.step(a)
+            # next_o = pre_processing(next_o)
 
             # reward clipping
-            if clip_reward is not None:
-                if r > clip_reward:
-                    r = clip_reward
-                elif r < -clip_reward:
-                    r = -clip_reward
+            # if clip_reward is not None:
+            #     if r > clip_reward:
+            #         r = clip_reward
+            #     elif r < -clip_reward:
+            #         r = -clip_reward
 
-            ep_ret += r
+            # ep_ret += r
             ep_len += 1
 
             # save and log
             buf.store(o, a, r, v, logp)
-            logger.store(VVals=v)
+            logger.store(VVals=v.mean())
             
             # Update obs (critical!)
             o = next_o
 
             # update memory
-            memory.pop(0)
-            memory.append(np.copy(o))
+            # memory.pop(0)
+            # memory.append(np.copy(o))
 
             timeout = ep_len == max_ep_len
-            terminal = d or timeout
+            done = True in d
             epoch_ended = t==local_steps_per_epoch-1
 
-            if d or timeout or epoch_ended:
-                if epoch_ended and not(terminal):
-                    print('Warning: trajectory cut off by epoch at %d steps.'%ep_len, flush=True)
+            if done or timeout or epoch_ended:
+                if done:
+                    for i, d_ in enumerate(d):
+                        if d_:
+                            buf.finish_path(i)
+                            ep_num += 1
+
                 # if trajectory didn't reach terminal state, bootstrap value target
                 if timeout or epoch_ended:
-                    o = np.concatenate(memory)
-                    _, v, _ = ac.step(torch.as_tensor(o, dtype=torch.float32).unsqueeze(0).to(device))
-                    
-                else:
-                    v = 0
-                buf.finish_path(v)
+                    concat_o = np.stack(o, axis=0)
+                    _, v, _ = ac.step(torch.as_tensor(concat_o, dtype=torch.float32).to(device))
+                    for i, d_ in enumerate(d):
+                        if not d_:
+                            buf.finish_path(i, v[i])
+
                 # if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     # logger.store(EpRet=ep_ret, EpLen=ep_len)
 
-                if d:
-                    # logger.store(EpRet=ep_ret)
-                    o, ep_ret = env.reset(), 0
-                    o = pre_processing(o)
-                    memory = [np.copy(o) for _ in range(4)]
-                    ep_num += 1
 
 
                 ep_len = 0
@@ -437,7 +435,7 @@ if __name__ == '__main__':
     from run_utils import setup_logger_kwargs
     logger_kwargs = setup_logger_kwargs(args.exp_name, args.seed)
 
-    ppo(nev_name=args.env, env_num=8,
+    ppo(env_name=args.env, env_num=8,
         clip_reward = args.clip_rew, max_ep_len=args.max_ep,
         seed=args.seed, steps_per_epoch=args.steps, minibatch_size=args.batch, epochs=args.epochs,
         logger_kwargs=logger_kwargs)

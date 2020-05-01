@@ -19,19 +19,19 @@ class VecEnv:
         self.memory = [[] for _ in range(num)]
 
     def reset(self, env_ids: List[int]):
-        obs = [pre_processing(env.reset()) for env in self.envs]
-        for memory, o in zip(self.memory, obs):
-            memory.clear()
-            memory = [np.copy(o) for _ in range(4)]
+
 
         for env_id in env_ids:
             o = self.envs[env_id].reset()
-            
+            o = pre_processing(o)
+            self.memory[env_id] = [np.copy(o) for _ in range(4)]
 
-        return obs
+
+        return [np.concatenate(memory) for memory in self.memory]
 
     def step(self, actions):
-        rets = []
+        rews = []
+        done = []
 
         assert len(actions) == len(self.envs), '{} actions but {} environments'.format(len(actions), len(self.envs))
 
@@ -40,9 +40,10 @@ class VecEnv:
             o = pre_processing(o)
             memory.pop(0)
             memory.append(o)
-            rets.append((np.concatenate(memory), r, d))
+            rews.append(r)
+            done.append(d)
 
-        return rets
+        return [np.concatenate(memory) for memory in self.memory], rews, done
 
 
         
