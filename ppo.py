@@ -325,13 +325,14 @@ def ppo(env_name, env_num,
 
     # Prepare for interaction with environment
     start_time = time.time()
-    o, ep_ret, ep_len = env.reset([i for i in range(env_num)]), 0, 0
+    o, ep_len = env.reset(), 0
     # o = pre_processing(o)
     # memory = [np.copy(o) for _ in range(4)]
 
     # Main loop: collect experience in env and update/log each epoch
     for epoch in range(epochs):
         ep_num = 0
+        ep_ret = 0
 
         for t in range(local_steps_per_epoch):
             
@@ -348,7 +349,7 @@ def ppo(env_name, env_num,
             #     elif r < -clip_reward:
             #         r = -clip_reward
 
-            # ep_ret += r
+            ep_ret += sum(r)
             ep_len += 1
 
             # save and log
@@ -376,22 +377,21 @@ def ppo(env_name, env_num,
                             buf.finish_path(i, v[i])
 
                 if done:
-                    d_idx = [i for i, d_ in enumerate(d) if d_]
+                    
                     for i, d_ in enumerate(d):
                         if d_:
                             buf.finish_path(i)
                             ep_num += 1
 
-                    o = env.reset(d_idx)
+                    o = env.reset()
 
                 # if terminal:
                     # only save EpRet / EpLen if trajectory finished
                     # logger.store(EpRet=ep_ret, EpLen=ep_len)
 
-
-
                 ep_len = 0
-        logger.store(EpRet=ep_ret)
+
+
         # Save model
         if (epoch % save_freq == 0) or (epoch == epochs-1):
             logger.save_state({'env': env}, None)
@@ -401,7 +401,7 @@ def ppo(env_name, env_num,
 
         # Log info about epoch
         logger.log_tabular('Epoch', epoch)
-        logger.log_tabular('EpRet', with_min_and_max=True)
+        logger.log_tabular('EpRet', ep_ret)
         logger.log_tabular('EpNum', ep_num)
         logger.log_tabular('VVals', with_min_and_max=True)
         logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
