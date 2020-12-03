@@ -149,23 +149,26 @@ class MLPActorCritic(nn.Module):
 class CNNActorCritic(nn.Module):
 
 
-    def __init__(self, observation_space, action_space, 
+    def __init__(self, action_space, 
                  hidden_sizes=[], activation=nn.ReLU):
         super().__init__()
 
-        obs_dim = 3136
-        latent_dim = 512
-        in_dim = observation_space.shape[2]
+
+        latent_dim = 256
         self.encoder = nn.Sequential(
-            nn.Conv2d(4, 32, 8, 4),
+            nn.Conv2d(6, 128, 3, 1),
             nn.ReLU(True),
-            nn.Conv2d(32, 64, 4, 2),
+
+            nn.Conv2d(128, 128, 3, 1, 1),
             nn.ReLU(True),
-            nn.Conv2d(64, 64, 3, 1),
+
+            nn.Conv2d(128, 128, 3, 1, 1),
             nn.ReLU(True),
+
+            nn.Conv2d(128, 16, 1, 1),
+            nn.ReLU(True),
+
             nn.Flatten(),
-            nn.Linear(obs_dim, latent_dim),
-            nn.ReLU(True)
         )
 
         for _, m in self.encoder.named_modules():

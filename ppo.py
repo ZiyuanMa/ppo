@@ -9,10 +9,7 @@ import gym
 import time
 from typing import Dict, List, Optional
 import core
-from vecenv import VecEnv
-from logx import EpochLogger
-from mpi_pytorch import setup_pytorch_for_mpi, sync_params, mpi_avg_grads
-from mpi_tools import mpi_fork, mpi_avg, proc_id, mpi_statistics_scalar, num_procs
+from environment import Environment
 device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
 
@@ -24,7 +21,7 @@ class PPOBuffer:
     """
 
     def __init__(self, obs_dim, act_dim, size, env_num, gamma=0.99, lam=0.95):
-        obs_dim=(4,84,84)
+        obs_dim=(6, 8, 8)
         self.obs_buf = np.zeros(core.combined_shape(size, obs_dim), dtype=np.float32)
         self.act_buf = np.zeros(core.combined_shape(size, act_dim), dtype=np.float32)
         self.adv_buf = np.zeros(size, dtype=np.float32)
@@ -35,7 +32,7 @@ class PPOBuffer:
         self.env_num = env_num
         self.gamma, self.lam = gamma, lam
         self.ptr, self.max_size = 0, size//env_num
-        self.path_start_idx = [0 for _ in range(env_num)]
+        self.path_start_idx = [ 0 for _ in range(env_num) ]
     def store(self, obs: List[np.ndarray], act: List[int], rew, val, logp):
         """
         Append one timestep of agent-environment interaction to the buffer.
@@ -178,17 +175,13 @@ def ppo(env_name, env_num,
     # Special function to avoid certain slowdowns from PyTorch + MPI combo.
     # setup_pytorch_for_mpi()
 
-    # Set up logger and save configuration
-    logger = EpochLogger(**logger_kwargs)
-    logger.save_config(locals())
-
     # Random seed
-    seed += 10000 * proc_id()
+    seed += 10000
     torch.manual_seed(seed)
     np.random.seed(seed)
 
     # Instantiate environment
-    env = VecEnv(env_name, env_num)
+    env = Environment()
     obs_dim = env.envs[0].observation_space.shape
     act_dim = env.envs[0].action_space.shape
 
@@ -201,11 +194,10 @@ def ppo(env_name, env_num,
 
     # Count variables
     var_counts = tuple(core.count_vars(module) for module in [ac.pi, ac.v])
-    logger.log('\nNumber of parameters: \t pi: %d, \t v: %d\n'%var_counts)
 
     # Set up experience buffer
-    local_steps_per_epoch = steps_per_epoch // env_num
-    buf = PPOBuffer(obs_dim, act_dim, steps_per_epoch, env_num, gamma, lam)
+    local_steps_per_epoch = steps_per_epoch // 4
+    buf = PPOBuffer(obs_dim, act_dim, steps_per_epoch, 4, gamma, lam)
 
     # Set up function for computing PPO policy loss
     def compute_pi_loss(latent, act, adv, old_logp):
@@ -232,25 +224,19 @@ def ppo(env_name, env_num,
     def compute_v_loss(latent, old_val, ret):
         val = ac.v(latent)
         clip_val = old_val + (val - old_val).clamp(-clip_ratio, clip_ratio)
-        return 0.5* (torch.max(
-                        (val - ret).pow(2),
-                        (clip_val - ret).pow(2)
-                    )).mean()
+        return 0.5* (torch.max((val - ret).pow(2), (clip_val - ret).pow(2))).mean()
         # return 0.5 * ((ac.v(latent) - ret).clamp(-clip_ratio, clip_ratio)**2).mean()
 
     # Set up optimizers for policy and value function
     optimizer = Adam(ac.parameters(), lr=2.5e-4, eps=1e-5)
     scheduler = LambdaLR(optimizer, lambda epoch: 1 - epoch / epochs)
 
-    # Set up model saving
-    logger.setup_pytorch_saver(ac)
-
     def update():
         data = buf.get()
 
         # pi_l_old, pi_info_old = compute_pi_loss(data)
         # pi_l_old = pi_l_old.item()
-        # v_l_old = compute_v_loss(data).item()
+        # v_l_old = compute_v_loss(data).item()S
 
         # # Train policy with multiple steps of gradient descent
         # for i in range(train_pi_iters):
@@ -274,7 +260,6 @@ def ppo(env_name, env_num,
         #     v_loss.backward()
         #     # mpi_avg_grads(ac.v)    # average grads across MPI processes
         #     vf_optimizer.step()
-        total_loss = 0
         loader = DataLoader(list(zip(*data)), 64)
 
         for _ in range(4):
@@ -298,12 +283,8 @@ def ppo(env_name, env_num,
                     nn.utils.clip_grad_norm_(ac.parameters(), grad_norm)
                 optimizer.step()
 
-                logger.store(PiLoss=pi_loss.item(), VLoss=v_loss.item(), EntLoss=ent_loss.item())
-
         # print(total_loss/4/len(loader))
         scheduler.step()
-        logger.store(Loss=total_loss/4/len(loader))
-
 
         # Log changes from update
         # kl, ent, cf = pi_info['kl'], pi_info_old['ent'], pi_info['cf']
@@ -349,7 +330,6 @@ def ppo(env_name, env_num,
 
             # save and log
             buf.store(o, a, r, v, logp)
-            logger.store(VVals=v.mean())
             
             # Update obs (critical!)
             o = next_o
@@ -393,25 +373,6 @@ def ppo(env_name, env_num,
 
         # Perform PPO update!
         update()
-
-        # Log info about epoch
-        logger.log_tabular('Epoch', epoch)
-        logger.log_tabular('EpRet', ep_ret)
-        logger.log_tabular('EpNum', ep_num)
-        logger.log_tabular('VVals', with_min_and_max=True)
-        logger.log_tabular('TotalEnvInteracts', (epoch+1)*steps_per_epoch)
-        logger.log_tabular('PiLoss', average_only=True)
-        logger.log_tabular('VLoss', average_only=True)
-        logger.log_tabular('EntLoss', average_only=True)
-        # logger.log_tabular('LossV', average_only=True)
-        # logger.log_tabular('DeltaLossPi', average_only=True)
-        # logger.log_tabular('DeltaLossV', average_only=True)
-        # logger.log_tabular('Entropy', average_only=True)
-        # logger.log_tabular('KL', average_only=True)
-        # logger.log_tabular('ClipFrac', average_only=True)
-        # logger.log_tabular('StopIter', average_only=True)
-        logger.log_tabular('Time', time.time()-start_time)
-        logger.dump_tabular()
 
     torch.save(ac.state_dict(), 'model.pth')
 
